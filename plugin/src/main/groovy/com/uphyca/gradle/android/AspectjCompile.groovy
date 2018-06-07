@@ -1,13 +1,29 @@
 package com.uphyca.gradle.android
 
+
+import java.io.File;
+
+import org.aspectj.bridge.AbortException;
 import org.aspectj.bridge.IMessage
+import org.aspectj.bridge.IMessage.Kind;
+import org.aspectj.bridge.ISourceLocation;
 import org.aspectj.bridge.MessageHandler
+import org.aspectj.bridge.MessageUtil;
+import org.aspectj.bridge.SourceLocation;
+
 import org.aspectj.tools.ajc.Main
+
+import org.aspectj.util.FileUtil;
+import org.aspectj.util.LangUtil;
+
 import org.gradle.api.GradleException
+
 import org.gradle.api.file.FileCollection
+
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.TaskAction
+
 import org.gradle.api.tasks.compile.AbstractCompile
 
 class AspectjCompile extends AbstractCompile {
@@ -63,24 +79,103 @@ class AspectjCompile extends AbstractCompile {
 
         MessageHandler handler = new MessageHandler(true);
         new Main().run(args as String[], handler);
+        GradleException ex = null;
         for (IMessage message : handler.getMessages(null, true)) {
             switch (message.getKind()) {
                 case IMessage.ABORT:
                 case IMessage.ERROR:
                 case IMessage.FAIL:
-                    log.error message.message, message.thrown
-                    throw new GradleException(message.message, message.thrown)
+                    log.error renderMessage(message), message.thrown
+                    ex = new GradleException(renderMessage(message), message.thrown)
+                    break;
                 case IMessage.WARNING:
-                    log.warn message.message, message.thrown
+                    log.warn renderMessage(message), message.thrown
                     break;
                 case IMessage.INFO:
-                    log.info message.message, message.thrown
+                    log.info renderMessage(message), message.thrown
                     break;
                 case IMessage.DEBUG:
-                    log.debug message.message, message.thrown
+                    log.debug renderMessage(message), message.thrown
                     break;
             }
+            
         }
+        if (ex != null) {
+            throw ex;
+        }
+    }
+
+    // XXX: This cde was stolen from AspectJ Master branch in Main, it serves as a better means to log compilation exceptions
+    /**
+     * Render message differently. If abort, then prefix stack trace with feedback request. If the actual message is empty, then
+     * use toString on the whole. Prefix message part with file:line; If it has context, suffix message with context.
+     * 
+     * @param message the IMessage to render
+     * @return String rendering IMessage (never null)
+     */
+    String renderMessage(IMessage message) {
+	// IMessage.Kind kind = message.getKind();
+        
+	StringBuffer sb = new StringBuffer();
+	String text = message.getMessage();
+	if (text.equals(AbortException.NO_MESSAGE_TEXT)) {
+	    text = null;
+	}
+	boolean toString = (LangUtil.isEmpty(text));
+	if (toString) {
+	    text = message.toString();
+	}
+	ISourceLocation loc = message.getSourceLocation();
+	String context = null;
+	if (null != loc) {
+	    File file = loc.getSourceFile();
+	    if (null != file) {
+		String name = file.getName();
+		if (!toString || (-1 == text.indexOf(name))) {
+		    sb.append(FileUtil.getBestPath(file));
+		    if (loc.getLine() > 0) {
+			sb.append(":" + loc.getLine());
+		    }
+		    int col = loc.getColumn();
+		    if (0 < col) {
+			sb.append(":" + col);
+		    }
+		    sb.append(" ");
+		}
+	    }
+	    context = loc.getContext();
+	}
+
+	// per Wes' suggestion on dev...
+			if (message.getKind() == IMessage.ERROR) {
+	    sb.append("[error] ");
+	} else if (message.getKind() == IMessage.WARNING) {
+	    sb.append("[warning] ");
+	}
+
+	sb.append(text);
+	if (null != context) {
+	    sb.append(LangUtil.EOL);
+	    sb.append(context);
+	}
+
+	String details = message.getDetails();
+	if (details != null) {
+	    sb.append(LangUtil.EOL);
+	    sb.append('\t');
+	    sb.append(details);
+	}
+	Throwable thrown = message.getThrown();
+	if (null != thrown) {
+	    sb.append(LangUtil.EOL);
+	    sb.append(Main.renderExceptionForUser(thrown));
+	}
+
+	if (message.getExtraSourceLocations().isEmpty()) {
+	    return sb.toString();
+	} else {
+	    return MessageUtil.addExtraSourceLocations(message, sb.toString());
+	}
     }
 
     @Input
